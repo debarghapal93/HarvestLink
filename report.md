@@ -2,6 +2,305 @@
 
 ---
 
+## [2026-09-01 00:30 IST] - Authentication & Role-Based Routing
+
+### Objective
+Pivoted the HarvestLink platform architecture from a 3-pane unified prototype to a production-grade Role-Based Access Control (RBAC) web application. Enforced authentication with JWTs and separated interfaces by user role (`farmer`, `buyer`, `logistics`).
+
+---
+
+### Task 2: Backend Authentication (Express & SQLite)
+- **Database Schema Update (`server/db/schema.sql`):** Added `email` (UNIQUE) and `password_hash` to the `users` table along with index `idx_users_email`.
+- **Programmatic Password Hashing (`server/db/seed.js`):** Used `bcryptjs` to hash demo user passwords during database initialization.
+  - Farmer: `farmer@demo.com` / `farmer123`
+  - Buyer: `buyer@demo.com` / `buyer123`
+  - Admin: `admin@demo.com` / `admin123`
+- **Authentication API (`server/routes/auth.js`):**
+  - `POST /api/auth/login`: Authenticates user credentials via `bcrypt.compare`, returning a signed 24h JWT containing `id`, `name`, and `role`.
+  - `GET /api/auth/me`: Decodes Bearer token and returns authenticated user metadata.
+- **RBAC & Token Middleware (`server/middleware/auth.js`):**
+  - `authenticateToken`: Validates incoming `Authorization: Bearer <token>` header for all `/api/listings` and `/api/demand` endpoints.
+  - `requireRole`: Express middleware to guard role-restricted endpoints.
+
+---
+
+### Task 3 & 4: Frontend Login Screen & React Router Architecture
+- **Branded Login Screen (`src/components/Login.jsx`):** Features HarvestLink emerald design, input sanitization, error display, and 3 Quick Login buttons ("🧑‍🌾 Login as Farmer", "🏢 Login as Buyer", "🚚 Login as Admin") for seamless demo testing.
+- **Client-Side RBAC & Routing (`src/App.jsx` & `src/components/ProtectedRoute.jsx`):**
+  - Configured `react-router-dom` with routes:
+    - `/login`: Public login interface.
+    - `/dashboard/farmer`: Accessible only to `farmer` role -> Renders `FarmerPane`.
+    - `/dashboard/buyer`: Accessible only to `buyer` role -> Renders `BuyerPane`.
+    - `/dashboard/admin`: Accessible only to `logistics` role -> Renders `LogisticsPane` and `RouteMap`.
+  - `ProtectedRoute`: Verifies JWT authentication; redirects unauthenticated users to `/login` and unauthorized roles to their respective home dashboard.
+
+---
+
+### Task 5: Context Cleanup (`src/context/AppContext.jsx` & `src/context/AuthContext.jsx`)
+- Dismantled `activeRole` mock state from `AppContext.jsx`.
+- Created `AuthContext.jsx` to persist JWT tokens and user details in `localStorage`.
+- Injected `Authorization: Bearer <token>` header automatically into all API client requests in `AppContext.jsx`.
+
+---
+
+### Quick Revision — JWT Flow & React Router Architecture
+
+#### JWT Auth Flow
+```
+[Client (Login.jsx)] ──POST /api/auth/login {email, password}──> [Express API]
+                                                                      │
+                                                           Verify Bcrypt Hash
+                                                                      │
+[Client (localStorage 'hl_token')] <──{token, user: {id, role}}───────┘
+          │
+  Attach 'Authorization: Bearer <token>' to all API requests
+          │
+  [Express authenticateToken Middleware] ──Verify JWT──> req.user
+```
+
+#### React Router Architecture
+- `/login` ➔ Public Login Screen with Quick-Login buttons
+- `/dashboard/farmer` ➔ `<ProtectedRoute allowedRoles={['farmer']}>` ➔ `FarmerDashboard`
+- `/dashboard/buyer` ➔ `<ProtectedRoute allowedRoles={['buyer']}>` ➔ `BuyerDashboard`
+- `/dashboard/admin` ➔ `<ProtectedRoute allowedRoles={['logistics']}>` ➔ `AdminDashboard`
+
+---
+
+## [2026-09-01 00:14 IST] - Codebase Optimization & Refactoring
+
+### Objective
+Optimize the HarvestLink full-stack codebase for high performance, maintainability, low memory footprint, and low latency ahead of introducing the Python AI microservice.
+
+---
+
+### Task 2: Database Performance
+- **WAL Mode Verification:** Confirmed `node:sqlite` database executes `PRAGMA journal_mode = WAL;` and `PRAGMA foreign_keys = ON;` on initialization for high-concurrency read/write operations.
+- **SQL Indexes Added:** Added targeted B-tree indexes to `server/db/schema.sql` for key search & filter columns:
+  - `produce_listings(crop)` & `produce_listings(status)`
+  - `demand_pool(crop)` & `demand_pool(status)`
+  - `users(role)`
+
+---
+
+### Task 3: Backend API Refactoring
+- **Global Error Handling Middleware:** Implemented centralized Express error handling middleware in `server/index.js` (`app.use((err, req, res, next) => ...)`). All route handlers forward runtime/DB exceptions using `next(err)` to avoid unhandled rejections or server crashes.
+- **Input Sanitization & Strict Validation:**
+  - Added HTML string sanitization (`sanitizeString`) stripping potential script tags and angle brackets.
+  - Implemented boundary & range checks (`isNaN`, `isFinite`, `qty > 0`, `price > 0`) returning structured 400 Bad Request JSON payloads.
+- **Query Column Projections:** Replaced `SELECT *` queries in `listings.js` and `demand.js` with explicit column selections (`SELECT id, crop, qty, price, status...`), reducing payload size and DB buffer allocations.
+
+---
+
+### Task 4: Frontend React Optimization
+- **`React.memo` Component Isolation:** Wrapped `DemandCard` in `memo()` to prevent unnecessary DOM re-renders when parent state updates without changing card props.
+- **`useMemo` Heavy Calculations:**
+  - `BuyerPane`: Memoized aggregated metrics (`totalDemand`, `totalMatched`, `avgPrice`) and filtered card array based on search input.
+  - `LogisticsPane`: Memoized truck load capacity percentage (`loadPct`), overcapacity flag (`isOverCapacity`), and dynamic route summary metrics (`estSavings`, `estHours`, `estMins`, `estDist`, `stops`).
+  - `FarmerPane`: Memoized crop metadata selection (`selectedCrop`, `cropEmoji`), active lots (`myLots`), and weekly earnings sum (`weeklyEarnings`).
+- **`useCallback` Stable Handler References:** Wrapped event handlers (`handleJoinClick`, `handleRadiusClick`, `handleOpenPoolClick`, `handleRunSolverClick`, `handleVoiceClick`, `handleList`) in `useCallback` to maintain reference equality across render cycles.
+
+---
+
+### Quick Revision — Optimized Hooks & DB Indexes Summary
+
+#### React Hooks Applied
+- **`React.memo`**: `DemandCard` (`src/components/DemandCard.jsx`)
+- **`useMemo`**:
+  - `BuyerPane`: `totalDemand`, `totalMatched`, `avgPrice`, `filtered`
+  - `LogisticsPane`: `totalKg`, `loadPct`, `isOverCapacity`, `nodeCount`, `estSavings`, `estHours`, `estMins`, `estDist`, `stops`
+  - `FarmerPane`: `selectedCrop`, `cropEmoji`, `myLots`, `weeklyEarnings`
+- **`useCallback`**:
+  - `DemandCard`: `handleJoinClick`
+  - `BuyerPane`: `handleRadiusClick`, `handleOpenPoolClick`
+  - `LogisticsPane`: `handleRunSolverClick`
+  - `FarmerPane`: `handleVoiceClick`, `handleList`
+
+#### Database Indexes Created (`server/db/schema.sql`)
+```sql
+CREATE INDEX IF NOT EXISTS idx_users_role      ON users(role);
+CREATE INDEX IF NOT EXISTS idx_listings_crop   ON produce_listings(crop);
+CREATE INDEX IF NOT EXISTS idx_listings_status ON produce_listings(status);
+CREATE INDEX IF NOT EXISTS idx_demand_crop     ON demand_pool(crop);
+CREATE INDEX IF NOT EXISTS idx_demand_status   ON demand_pool(status);
+```
+
+---
+
+## [2026-08-31 23:34 IST] - Backend Integration & Real Data Hookup
+
+### Objective
+Transition from mock React-state prototype to a real full-stack architecture: Express.js REST API + Node.js built-in SQLite (`node:sqlite`) with Vite dev-proxy, replacing all `setTimeout` simulations with true async network I/O.
+
+### Architecture
+- **Stack:** Vite + React (frontend) · Express.js (API) · Node.js 22 `node:sqlite` (DB)
+- **Why `node:sqlite`:** `better-sqlite3` native bindings failed to compile on Node v22. `node:sqlite` is built into Node 22 — zero external deps, identical synchronous API.
+- **Dev flow:** `npm run dev:full` starts both servers concurrently. Vite proxies `/api/*` → `http://localhost:3001`.
+
+### Task 2: Database Schema
+**Files:** `server/db/schema.sql` · `server/db/seed.sql` · `server/db/database.js`
+
+Three tables: `users`, `produce_listings`, `demand_pool`.
+- `produce_listings` stores crop, qty, price, status, and auto-generated SVG/geo coordinates.
+- `demand_pool` tracks `matched_qty` which is atomically incremented on every new listing POST.
+- FK constraints enforce referential integrity with CASCADE delete.
+
+### Task 3: REST API Endpoints
+**Files:** `server/index.js` · `server/routes/listings.js` · `server/routes/demand.js`
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/health` | DB liveness check |
+| POST | `/api/listings` | Insert listing + auto-match demand in one DB session |
+| GET | `/api/listings/active` | All non-fulfilled listings |
+| POST | `/api/demand` | Create demand, pre-calculates matched_qty |
+| GET | `/api/demand/active` | Priority-sorted active demand pool |
+
+### Task 4: Frontend API Integration
+**Files:** `src/context/AppContext.jsx` · `src/components/FarmerPane.jsx` · `vite.config.js`
+
+- All mock arrays removed. Real `fetch` calls replace them.
+- `addListing()` does `POST /api/listings` then calls `fetchDemand()` for cache invalidation.
+- 15-second polling keeps all panes live.
+- `FarmerPane.handleList` uses `try/catch/finally` — no mock delay setTimeout.
+
+### Quick Revision — Data Flow & Entity Relationships
+```
+Farmer submits form
+  → POST /api/listings { crop, qty, price }
+      → INSERT produce_listings (auto-generates x/y/lat/lng coords)
+      → UPDATE demand_pool SET matched_qty WHERE crop MATCH
+      → Response: listing object
+  → Client optimistic state update (listing prepended)
+  → fetchDemand() re-fetches → BuyerPane + RouteMap re-render from real DB
+
+Key relationships:
+  users (1) ──< produce_listings (N)   [FK: farmer_id]
+  users (1) ──< demand_pool (N)        [FK: buyer_id]
+  demand_pool.matched_qty ← incremented by listing inserts
+```
+
+### Files Changed
+| File | Action | Description |
+|------|--------|-------------|
+| `server/index.js` | **Created** | Express entry: CORS, routes, health check |
+| `server/db/schema.sql` | **Created** | SQLite DDL with CHECK, FK, indexes |
+| `server/db/seed.sql` | **Created** | Initial seed mirroring prior mock data |
+| `server/db/database.js` | **Created** | `node:sqlite` singleton, WAL, auto-migrate + seed |
+| `server/routes/listings.js` | **Created** | POST + GET listings |
+| `server/routes/demand.js` | **Created** | POST + GET demand pool |
+| `src/context/AppContext.jsx` | Modified | Real fetch/post; polling; cache invalidation |
+| `src/components/FarmerPane.jsx` | Modified | Real async try/catch; no mock delay |
+| `vite.config.js` | Modified | `/api` proxy to Express |
+| `package.json` | Modified | `dev:full` script; express/sqlite/concurrently deps |
+
+---
+
+## [2026-08-31 23:21 IST] - AI Pricing Engine & Voice Input UI
+
+
+### Objective
+Implement a dynamic AI recommendation pricing engine that calculates real-time crop market rates and quantity bulk premiums, along with a simulated hands-free Voice-to-Text input workflow in the Farmer Listing pane.
+
+---
+
+### Task 1: Documentation Update
+- Documented implementation of simulated speech recognition and dynamic pricing calculations.
+
+---
+
+### Task 2: Dynamic Pricing Engine (`calculateRecommendedPrice`)
+**Modified:** `src/context/AppContext.jsx` & `src/components/FarmerPane.jsx`
+- **Crop Market Base Rates:** Configured base pricing rules (`Tomato`: ₹22, `Onion`: ₹18, `Wheat`: ₹24, `Potato`: ₹16, `Chilli`: ₹55, `Brinjal`: ₹20).
+- **Algorithmic Bulk & Routing Premium:**
+  - `quantity >= 500kg`: +25% bulk routing efficiency bonus.
+  - `quantity >= 200kg`: +18% premium.
+  - `quantity >= 100kg`: +12% premium.
+  - `quantity >= 50kg`: +5% premium.
+  - Includes +₹0.5 local supply bump simulation.
+- **Reactive UI Calculation:** As crop or quantity changes (e.g. typing "500"), `aiPrice` updates dynamically (e.g. Tomato changing from ₹22 to ₹28/kg).
+- **Visual Flash Effect:** Triggers a 700ms scale, border highlight, and green glow flash on the "HarvestLink AI Recommended Price" card whenever recommendations update.
+
+---
+
+### Task 3: Simulated Voice-to-Text Input ("Tap to speak your produce")
+**Modified:** `src/components/FarmerPane.jsx`
+- **Interactive Speech Recognition State (`isRecording`):**
+  - Clicking the center Mic button activates recording state for 3 seconds.
+  - Mic button pulses with a red wave effect (`bg-red-600 animate-pulse`).
+  - Text updates dynamically to `"Listening... 'I want to sell 100kg of tomatoes'"`.
+- **Speech Auto-Parsing:** After 3 seconds:
+  - Automatically selects `Tomato` crop.
+  - Automatically populates `Quantity` input to `100kg`.
+  - Fires dynamic pricing engine to calculate ₹25.1/kg for 100kg Tomatoes.
+  - Shows success notification toast: `🎯 Voice AI: Parsed "100kg Tomato" & calculated recommended price!`.
+
+---
+
+### Files Changed Summary
+
+| File | Action | Description |
+|------|--------|-------------|
+| `src/context/AppContext.jsx` | Modified | Added `CROP_BASE_PRICES` dictionary and `calculateRecommendedPrice` utility |
+| `src/components/FarmerPane.jsx` | Modified | Integrated dynamic pricing engine calculation, visual card flash, and voice simulation |
+| `report.md` | Modified | Updated with technical changelog for this task |
+
+---
+
+## [2026-08-31 23:02 IST] - Logistics Map Interactivity & Mock Routing
+
+### Objective
+Resolve deployment build notes, integrate mock geospatial coordinate system into global state, replace static map with a dynamic SVG routing canvas driven by live listings, and wire up AI VRP Solver logic with capacity overload detection.
+
+---
+
+### Task 1: Documentation & Build Resolution
+- Documented Vercel deployment resolution: fixed Vite permission denied issues by updating `package.json` build scripts and postinstall allowances.
+- Outlined new interactive features for Logistics Pane & Route Optimization Engine.
+
+---
+
+### Task 2: Geospatial Coordinate Integration
+**Modified:** `src/context/AppContext.jsx`
+- Added fixed central Hub coordinate `(lat: 20.00, lng: 73.78, x: 185, y: 150)` representing Nashik District Hub, and Destination coordinate `(19.07, 72.87, x: 310, y: 165)` representing Mumbai Urban Market.
+- Updated `produceListings` data model to store `lat`, `lng`, `x`, and `y` normalized canvas coordinates.
+- Dynamic Node Generation: When `addListing({ crop, qty, price })` is invoked by farmers, the system uses a golden-angle algorithm to calculate procedural `(x, y)` SVG canvas coordinates and `(lat, lng)` offsets within a 20km radius of the Hub.
+- Added `runSolver` context action to toggle solver calculations and update optimization status badges.
+
+---
+
+### Task 3: Dynamic SVG Route Map Component
+**Modified:** `src/components/RouteMap.jsx`
+- Replaced hardcoded farm SVG elements with dynamic rendering mapped over `produceListings` from global state.
+- Rendered green farm markers dynamically at calculated `(x, y)` coordinates with label badges (`Farm A`, `Farm B`, etc.).
+- Created dynamic path rendering: when `routeBadge === 'optimized'` or `'solving'`, dynamic dashed route lines are drawn connecting every farm node to the Central Hub `(185, 150)` and onto Mumbai `(310, 165)`.
+- Integrated SVG `animateMotion` truck pulse traversing along the primary farm-to-hub route.
+- Dynamic Legend & Node Counter displaying live active farm count.
+
+---
+
+### Task 4: AI Route Optimizer & Dynamic Capacity Logic
+**Modified:** `src/components/LogisticsPane.jsx`
+- **Dynamic Truck Capacity Calculation:** Sums `qty` of all active `produceListings`. Calculates load percentage against maximum capacity (2,000 kg).
+- **Overcapacity Alert System:** If total listing weight exceeds 2,000 kg, the Truck Load progress bar transitions dynamically to warning red (`bg-red-500`) with text alert `⚠️ Overcapacity (+X kg)`. Otherwise, renders standard green gradient (`#0F9361`).
+- **Dynamic AI Route Summary Metrics:** 
+  - *Estimated Savings:* Calculates savings based on connected node count (`₹(5.50 + n * 0.50)/kg`).
+  - *Transit Time & Distance:* Dynamically updates estimated transit duration and total route distance.
+  - *Dynamic Timeline:* Generates route stop badges for connected farms, Hub, and Mumbai Destination.
+- **Interactive VRP Solver CTA:** Clicking "Run AI Vehicle Routing Solver" triggers a 1.5s calculating state with animated spinner, sets `routeBadge` to `'optimized'`, and fires toast notifications.
+
+---
+
+### Files Changed Summary
+
+| File | Action | Description |
+|------|--------|-------------|
+| `src/context/AppContext.jsx` | Modified | Added geospatial coordinates (`lat`, `lng`, `x`, `y`), dynamic node generation, and `runSolver` state action |
+| `src/components/RouteMap.jsx` | Modified | Dynamic SVG map component driven by live `produceListings` with animated route paths |
+| `src/components/LogisticsPane.jsx` | Modified | Dynamic truck capacity meter, overcapacity warning state, dynamic metrics, and VRP solver button |
+| `report.md` | Modified | Updated with technical report for this task |
+
+---
+
 ## [2026-08-31 15:39 IST] - UI State & Interactivity Wiring
 
 ### Objective
@@ -95,7 +394,3 @@ When `addListing` is called, it calls `setBuyerDemand` with a functional updater
 | `src/components/LogisticsPane.jsx` | Modified | `addToast` from context |
 | `src/components/Toast.jsx` | Modified | New rich `MatchToast` component for `type='match'` |
 | `report.md` | **Created** | This file |
-
----
-
-*Next steps: Expand `AppContext` with persistence (localStorage), add optimistic UI for Logistics pane truck state updates, and implement farmer earnings aggregation from `produceListings`.*

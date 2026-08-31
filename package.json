@@ -1,16 +1,25 @@
 {
   "name": "harvestlink",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node --experimental-sqlite server/index.js",
+    "dev:full": "concurrently -k -n \"API,VITE\" -c \"cyan,green\" \"node --experimental-sqlite server/index.js\" \"vite\"",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.10.0",
+    "concurrently": "^9.1.2",
+    "cors": "^2.8.5",
+    "express": "^5.0.1",
+    "jsonwebtoken": "^9.0.3",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

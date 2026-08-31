@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useAppContext } from '../context/AppContext';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useAppContext, calculateRecommendedPrice } from '../context/AppContext';
 
 const CROPS = [
   { value: 'tomato',  label: '🍅 Tomato',  name: 'Tomato'  },
@@ -11,25 +11,68 @@ const CROPS = [
 ];
 
 export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, onEdit }) {
-  const { addListing, addToast, aiPrice, produceListings } = useAppContext();
+  const { addListing, addToast, aiPrice, setAiPrice, produceListings } = useAppContext();
 
-  // ── Local form state (cleared after each submission) ──
-  const [crop,       setCrop]      = useState('tomato');
-  const [qty,        setQty]       = useState('50');
-  const [isListing,  setListing]   = useState(false);
-  const [flashInput, setFlashInput] = useState(false);
+  // ── Local form state ──
+  const [crop,        setCrop]        = useState('tomato');
+  const [qty,         setQty]         = useState('50');
+  const [isListing,   setListing]     = useState(false);
+  const [flashInput,  setFlashInput]  = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [priceFlash,  setPriceFlash]  = useState(false);
 
-  // Apply voice-recognized values from App.jsx
+  // ── Dynamic Pricing Engine Calculation ──
+  useEffect(() => {
+    const newPrice = calculateRecommendedPrice(crop, qty);
+    if (newPrice !== aiPrice) {
+      setAiPrice(newPrice);
+      setPriceFlash(true);
+      const t = setTimeout(() => setPriceFlash(false), 700);
+      return () => clearTimeout(t);
+    }
+  }, [crop, qty, setAiPrice, aiPrice]);
+
+  // Apply voice props if passed from parent
   useEffect(() => {
     if (voiceCrop) setCrop(voiceCrop);
     if (voiceQty)  setQty(String(voiceQty));
     if (voiceCrop || voiceQty) clearVoice();
   }, [voiceCrop, voiceQty, clearVoice]);
 
-  const selectedCrop = CROPS.find(c => c.value === crop) || CROPS[0];
-  const cropEmoji = selectedCrop.label.split(' ')[0];
+  // ── Optimized: Memoized Crop metadata ──
+  const selectedCrop = useMemo(() => {
+    return CROPS.find(c => c.value === crop) || CROPS[0];
+  }, [crop]);
 
-  const handleList = async () => {
+  const cropEmoji = useMemo(() => {
+    return selectedCrop.label.split(' ')[0];
+  }, [selectedCrop]);
+
+  // ── Optimized: Memoized Active Lots & Earnings ──
+  const myLots = useMemo(() => {
+    return produceListings.slice(0, 2);
+  }, [produceListings]);
+
+  const weeklyEarnings = useMemo(() => {
+    const total = produceListings.reduce((s, l) => s + (l.qty || 0) * (l.price || 0), 0);
+    return (total / 1000).toFixed(1);
+  }, [produceListings]);
+
+  // ── Optimized: Stable Handlers ──
+  const handleVoiceClick = useCallback(() => {
+    if (isRecording) return;
+    setIsRecording(true);
+    addToast('🎙️ Speech Recognition active. Speak your produce details…', 'info');
+
+    setTimeout(() => {
+      setIsRecording(false);
+      setCrop('tomato');
+      setQty('100');
+      addToast('🎯 Voice AI: Parsed "100kg Tomato" & calculated recommended price!', 'success');
+    }, 3000);
+  }, [isRecording, addToast]);
+
+  const handleList = useCallback(async () => {
     const qtyNum = parseFloat(qty);
     if (!qty || isNaN(qtyNum) || qtyNum < 1) {
       addToast('⚠️ Please enter a valid quantity', 'error');
@@ -37,19 +80,18 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
     }
 
     setListing(true);
-    await new Promise(r => setTimeout(r, 1800));
-
-    addListing({ crop: selectedCrop.name, qty: qtyNum, price: aiPrice });
-
-    // Clear quantity field + brief flash
-    setQty('');
-    setFlashInput(true);
-    setTimeout(() => setFlashInput(false), 800);
-    setListing(false);
-  };
-
-  // ── Derive active lots from context state ──
-  const myLots = produceListings.slice(0, 2);
+    try {
+      await addListing({ crop: selectedCrop.name, qty: qtyNum, price: aiPrice });
+      setQty('');
+      setFlashInput(true);
+      setTimeout(() => setFlashInput(false), 800);
+    } catch (err) {
+      console.error('[handleList]', err);
+      addToast(`❌ Failed to list produce: ${err.message}`, 'error');
+    } finally {
+      setListing(false);
+    }
+  }, [qty, selectedCrop.name, aiPrice, addListing, addToast]);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-col gap-4"
@@ -72,14 +114,36 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
           style={{ background:'#E6F4EF', color:'#0D7A51', borderColor:'rgba(13,122,81,0.15)' }}>Live</span>
       </div>
 
-      {/* Voice Card */}
-      <div className="rounded-2xl border flex flex-col items-center gap-3 p-5"
-        style={{ background:'linear-gradient(135deg,#E6F4EF,#f0fff4)', borderColor:'rgba(13,122,81,0.15)' }}>
-        <button id="voice-btn" onClick={onVoice}
-          className="relative w-20 h-20 flex items-center justify-center">
-          <span className="voice-ring voice-ring-1" /><span className="voice-ring voice-ring-2" /><span className="voice-ring voice-ring-3" />
-          <div className="relative z-10 w-14 h-14 rounded-full flex items-center justify-center"
-            style={{ background:'linear-gradient(135deg,#0F9361,#0D7A51)', boxShadow:'0 6px 20px rgba(13,122,81,0.35)' }}>
+      {/* Voice-to-Text Card with Voice Simulation */}
+      <div className={`rounded-2xl border flex flex-col items-center gap-3 p-5 transition-all duration-300 ${
+        isRecording
+          ? 'bg-red-50/90 border-red-300 shadow-md'
+          : 'bg-gradient-to-br from-[#E6F4EF] to-[#f0fff4] border-[#0D7A51]/15'
+      }`}>
+        <button
+          id="voice-btn"
+          onClick={handleVoiceClick}
+          className="relative w-20 h-20 flex items-center justify-center cursor-pointer"
+        >
+          {isRecording ? (
+            <>
+              <span className="absolute inset-0 rounded-full bg-red-400 opacity-75 animate-ping" />
+              <span className="absolute -inset-2 rounded-full bg-red-200 opacity-50 animate-pulse" />
+            </>
+          ) : (
+            <>
+              <span className="voice-ring voice-ring-1" />
+              <span className="voice-ring voice-ring-2" />
+              <span className="voice-ring voice-ring-3" />
+            </>
+          )}
+          <div
+            className={`relative z-10 w-14 h-14 rounded-full flex items-center justify-center transition-colors duration-300 ${
+              isRecording
+                ? 'bg-red-600 shadow-[0_6px_20px_rgba(220,38,38,0.4)] animate-pulse'
+                : 'bg-gradient-to-br from-[#0F9361] to-[#0D7A51] shadow-[0_6px_20px_rgba(13,122,81,0.35)]'
+            }`}
+          >
             <svg width="26" height="26" viewBox="0 0 24 24" fill="white">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
               <path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="white" strokeWidth="2" fill="none" strokeLinecap="round"/>
@@ -88,7 +152,12 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
             </svg>
           </div>
         </button>
-        <p className="text-[0.82rem] font-semibold text-[#0D7A51]">Tap to speak your produce</p>
+
+        <p className={`text-[0.84rem] font-bold text-center transition-colors ${
+          isRecording ? 'text-red-700 font-extrabold animate-pulse' : 'text-[#0D7A51]'
+        }`}>
+          {isRecording ? "Listening… 'I want to sell 100kg of tomatoes'" : "Tap to speak your produce"}
+        </p>
         <p className="text-[0.7rem] text-gray-500">भाषा: हिंदी, English, मराठी</p>
       </div>
 
@@ -136,20 +205,25 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
         </div>
       </div>
 
-      {/* AI Price Card */}
-      <div className="rounded-2xl border p-3.5 flex items-center justify-between"
-        style={{ background:'linear-gradient(135deg,#f0fdf4,#fff)', borderColor:'rgba(13,122,81,0.15)' }}>
+      {/* HarvestLink AI Dynamic Price Card */}
+      <div className={`rounded-2xl border p-3.5 flex items-center justify-between transition-all duration-300 ${
+        priceFlash
+          ? 'bg-emerald-100 border-[#0D7A51] scale-[1.02] shadow-md ring-2 ring-[#0D7A51]/20'
+          : 'bg-gradient-to-br from-[#f0fdf4] to-white border-[#0D7A51]/15'
+      }`}>
         <div className="flex items-center gap-2.5">
-          <span className="text-base font-bold" style={{ color:'#0D7A51' }}>✦</span>
+          <span className="text-base font-bold text-[#0D7A51]">✦</span>
           <div>
-            <p className="text-[0.72rem] font-semibold text-[#0D7A51]">HarvestLink AI Price</p>
+            <p className="text-[0.72rem] font-semibold text-[#0D7A51]">HarvestLink AI Recommended Price</p>
             <p className="text-[1.6rem] font-extrabold text-[#0D7A51] leading-none">
               ₹{aiPrice}<span className="text-[0.75rem] font-semibold text-gray-500">/kg</span>
             </p>
           </div>
         </div>
         <div className="flex flex-col items-end gap-1.5">
-          <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">+12% vs yesterday</span>
+          <span className="text-[0.65rem] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+            {parseFloat(qty) >= 100 ? '+15% Bulk Premium' : '+12% vs yesterday'}
+          </span>
           <button id="ai-edit-btn" onClick={onEdit}
             className="flex items-center gap-1 text-[0.72rem] font-bold px-2.5 py-1 rounded-lg border border-[#0D7A51] text-[#0D7A51] hover:bg-[#0D7A51] hover:text-white transition-all">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -179,7 +253,7 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
         )}
       </button>
 
-      {/* Active Lots — derived from context */}
+      {/* Active Lots */}
       <div className="section-divider">Your Active Lots <span className="ml-1.5 text-[0.65rem] bg-[#E6F4EF] text-[#0D7A51] px-2 py-px rounded-full font-bold">{produceListings.length}</span></div>
 
       <div className="flex flex-col gap-2">
@@ -209,7 +283,7 @@ export default function FarmerPane({ voiceCrop, voiceQty, clearVoice, onVoice, o
       {/* Earnings */}
       <div className="flex gap-2">
         {[
-          { icon:'₹', label:'This Week',   value:`₹${(produceListings.reduce((s,l) => s + l.qty * l.price, 0) / 1000).toFixed(1)}k` },
+          { icon:'₹', label:'This Week',   value:`₹${weeklyEarnings}k` },
           { icon:'↑', label:'Avg Premium', value:'+₹3.2/kg' },
         ].map(chip => (
           <div key={chip.label} className="flex-1 flex items-center gap-2 rounded-xl border px-3 py-2.5"

@@ -1,14 +1,20 @@
-export default function DemandCard({ data, onJoin, addToast }) {
+import { memo, useCallback } from 'react';
+
+const statusStyles = {
+  matching: 'bg-yellow-50 text-yellow-700 animate-badge-pulse',
+  ready:    'bg-green-100 text-green-700',
+  open:     'bg-[#E6F4EF] text-[#0D7A51]',
+};
+
+const DemandCard = memo(function DemandCard({ data, onJoin, addToast }) {
   const { id, emoji, title, qty, subtitle, buyerIcon, price, location, time, filled, total, status, isPriority } = data;
 
-  const statusStyles = {
-    matching: 'bg-yellow-50 text-yellow-700 animate-badge-pulse',
-    ready:    'bg-green-100 text-green-700',
-    open:     'bg-[#E6F4EF] text-[#0D7A51]',
-  };
   const statusLabel = status === 'matching' ? 'Matching in Progress' : status === 'ready' ? 'Ready for Pickup' : 'Open';
-
   const fillPct = Math.round((filled / total) * 100);
+
+  const handleJoinClick = useCallback(() => {
+    onJoin(id);
+  }, [onJoin, id]);
 
   return (
     <div className={`border-[1.5px] rounded-2xl p-3.5 transition-all duration-200 hover:shadow-md hover:-translate-y-px ${
@@ -49,10 +55,10 @@ export default function DemandCard({ data, onJoin, addToast }) {
 
       {/* Footer */}
       <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-gray-100">
-        <span className={`text-[0.65rem] font-bold px-2 py-1 rounded-full ${statusStyles[status]}`}>{statusLabel}</span>
+        <span className={`text-[0.65rem] font-bold px-2 py-1 rounded-full ${statusStyles[status] || statusStyles.open}`}>{statusLabel}</span>
         <button
           id={`join-dc-${id}`}
-          onClick={() => onJoin(id)}
+          onClick={handleJoinClick}
           className={`rounded-xl px-3.5 py-1.5 text-[0.78rem] font-bold transition-all active:scale-95 ${
             status === 'ready'
               ? 'bg-white text-blue-600 border-[1.5px] border-blue-100 hover:bg-blue-50'
@@ -64,4 +70,6 @@ export default function DemandCard({ data, onJoin, addToast }) {
       </div>
     </div>
   );
-}
+});
+
+export default DemandCard;
