@@ -1,0 +1,60 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        'brand-green':     '#0D7A51',
+        'brand-green-mid': '#0F9361',
+        'brand-badge':     '#E6F4EF',
+        'brand-orange':    '#F97316',
+        'brand-orange-dk': '#EA580C',
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+      },
+      borderRadius: { '2xl': '1rem', '3xl': '1.25rem' },
+      animation: {
+        'route-flow':    'routeFlow 2s linear infinite',
+        'route-flow-2':  'routeFlow 2s linear infinite 0.4s',
+        'route-flow-3':  'routeFlow 2s linear infinite 0.8s',
+        'voice-ring-1':  'voiceRing 2.2s ease-out infinite',
+        'voice-ring-2':  'voiceRing 2.2s ease-out infinite 0.55s',
+        'voice-ring-3':  'voiceRing 2.2s ease-out infinite 1.1s',
+        'shimmer':       'shimmer 1.8s linear infinite',
+        'cta-glow':      'ctaGlow 2.5s ease-in-out infinite',
+        'solver-spin':   'solverSpin 1s linear infinite',
+        'ticker-blink':  'tickerBlink 1.4s ease-in-out infinite',
+        'panel-in':      'panelIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)',
+        'toast-in':      'toastIn 0.3s ease',
+        'badge-pulse':   'badgePulse 1.8s ease-in-out infinite',
+        'sparkle':       'sparkleHue 3s linear infinite',
+        'truck-move':    'truckMove 4s linear infinite',
+        'bar-wave':      'barWave 0.9s ease-in-out infinite alternate',
+        'pulse-ring':    'pulseRing 2s ease-in-out infinite',
+      },
+      keyframes: {
+        routeFlow:    { to: { 'stroke-dashoffset': '-24' } },
+        voiceRing:    { '0%': { transform: 'scale(0.85)', opacity: '0.8' }, '100%': { transform: 'scale(1.05)', opacity: '0' } },
+        shimmer:      { from: { backgroundPosition: '-200% 0' }, to: { backgroundPosition: '200% 0' } },
+        ctaGlow: {
+          '0%, 100%': { boxShadow: '0 4px 16px rgba(249,115,22,0.35)' },
+          '50%':       { boxShadow: '0 4px 24px rgba(249,115,22,0.55)' },
+        },
+        solverSpin:   { to: { transform: 'rotate(360deg)' } },
+        tickerBlink:  { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0.3' } },
+        panelIn:      { from: { transform: 'scale(0.88) translateY(20px)', opacity: '0' }, to: { transform: 'scale(1) translateY(0)', opacity: '1' } },
+        toastIn:      { from: { transform: 'translateX(100%)', opacity: '0' }, to: { transform: 'translateX(0)', opacity: '1' } },
+        badgePulse:   { '0%, 100%': { opacity: '1' }, '50%': { opacity: '0.6' } },
+        sparkleHue:   { '0%': { filter: 'hue-rotate(0deg)' }, '100%': { filter: 'hue-rotate(360deg)' } },
+        barWave:      { from: { transform: 'scaleY(0.5)', opacity: '0.5' }, to: { transform: 'scaleY(1)', opacity: '1' } },
+        pulseRing: {
+          '0%, 100%': { transform: 'scale(1)', opacity: '0.7' },
+          '50%':       { transform: 'scale(1.18)', opacity: '0.3' },
+        },
+      },
+    },
+  },
+  plugins: [],
+};
