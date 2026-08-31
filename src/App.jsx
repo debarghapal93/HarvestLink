@@ -78,13 +78,15 @@ export default function App() {
 
       {/* ── Overlays ── */}
       {isVoiceOpen && (
-        <VoiceOverlay
+      <VoiceOverlay
           onClose={() => setVoiceOpen(false)}
           onRecognized={(c, q) => {
             setVoiceCrop(c);
             setVoiceQty(q);
             setVoiceOpen(false);
-            addToast('🎙️ Recognized: "50 kg Tomato" — fields filled!', 'success');
+            const cropText = c ? c.charAt(0).toUpperCase() + c.slice(1) : null;
+            const parts = [q ? `${q} kg` : null, cropText].filter(Boolean);
+            addToast(`🎙️ Recognized: "${parts.length ? parts.join(' ') : 'voice input'}" — fields filled!`, 'success');
           }}
         />
       )}
