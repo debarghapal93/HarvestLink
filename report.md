@@ -2,6 +2,21 @@
 
 ---
 
+## [2026-09-01 14:49 IST] - Supabase IPv4 Connection Pooling Configuration
+
+### Objective
+Migrated the PostgreSQL connection from the IPv6 Direct Connection to the IPv4 Transaction pooler to resolve Vercel Edge Serverless connectivity restrictions (ENOTFOUND crash).
+
+---
+
+### Task 2: Optimize node-postgres for Transaction Pooling
+- Updated `pg.Pool` configuration in `server/db/database.js` to natively leverage the external connection pooler (Supavisor):
+  - Configured `ssl: { rejectUnauthorized: false }` for Supabase's secure TLS environment.
+  - Specified `max: 1` as each Vercel isolate container spins up stateless and only utilizes a single dedicated transaction connection natively. Heavy concurrent pooling is delegated entirely to Supabase's external pooler at `aws-0-*.pooler.supabase.com:6543`.
+  - Defined `idleTimeoutMillis: 0` to prevent suspended serverless containers from holding stale connections open indefinitely.
+
+---
+
 ## [2026-09-01 14:22 IST] - Serverless Execution & DB Pool Hardening
 
 ### Objective

@@ -8,7 +8,9 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 1,
+  idleTimeoutMillis: 0
 });
 
 // Test query without killing process on transient errors
