@@ -2,6 +2,28 @@
 
 ---
 
+## [2026-09-01 14:11 IST] - Vercel Serverless Monorepo Deployment Configuration
+
+### Objective
+Configure the HarvestLink repository to act as a unified monorepo deploying both the Vite React frontend and Express backend to Vercel, integrating with our Supabase PostgreSQL database.
+
+---
+
+### Task 2: Configure Serverless Entrypoint
+- `server/index.js` was verified to export the `app` instance correctly.
+- Created `api/index.js` as the Vercel serverless function entrypoint.
+- Created `vercel.json` with rewrite rules:
+  - `/api/(.*)` routes to the Express backend (`/api/index.js`).
+  - `/(.*)` routes to the Vite single-page application (`/index.html`).
+
+---
+
+### Task 3: Verify Environment Handling
+- `server/db/database.js` safely reads `process.env.DATABASE_URL` in the Vercel serverless environment.
+- Configured PostgreSQL pool with `ssl: { rejectUnauthorized: false }` to ensure secure connections to Supabase from Vercel's serverless functions.
+
+---
+
 ## [2026-09-01 11:41 IST] - Database Migration: SQLite to Supabase (PostgreSQL)
 
 ### Objective
