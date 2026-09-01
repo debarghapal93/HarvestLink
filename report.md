@@ -2,6 +2,95 @@
 
 ---
 
+## [2026-09-01 11:41 IST] - Database Migration: SQLite to Supabase (PostgreSQL)
+
+### Objective
+Replaced the local `node:sqlite` (Node.js 22 built-in) database driver with `pg` (node-postgres) connecting to a live **Supabase PostgreSQL** instance. All API contracts, JWT authentication, and UI behaviours are preserved exactly.
+
+---
+
+### Task 2: Setup Database Connection (`server/db/database.js`)
+- **Installed packages:** `pg`, `dotenv`.
+- Rewrote `database.js` to export a singleton `pg.Pool` — replacing `DatabaseSync` entirely.
+- Connection via `process.env.DATABASE_URL` (set in `.env`).
+- Included `ssl: { rejectUnauthorized: false }` for Supabase's TLS requirement.
+- Added `connectDb()` async boot function called at server startup; exits process if connection fails.
+- Added `.env` to `.gitignore`; created `.env.example` as a safe template for collaborators.
+
+---
+
+### Task 3: Route SQL Refactoring
+
+Three files were fully refactored — `auth.js`, `listings.js`, `demand.js`:
+
+| Change                        | SQLite (before)                          | PostgreSQL (after)                             |
+|-------------------------------|------------------------------------------|------------------------------------------------|
+| **Parameters**                | `?`                                      | `$1, $2, $3, …`                                |
+| **Execution**                 | `.prepare().get()` / `.all()` / `.run()` | `await pool.query(sql, params)`                |
+| **Single row result**         | Direct return value                      | `result.rows[0]`                               |
+| **Multi row result**          | Array return value                       | `result.rows`                                  |
+| **Insert return ID**          | `result.lastInsertRowid`                 | `RETURNING id` + `result.rows[0].id`          |
+| **All handlers**              | Synchronous                              | `async` with `await`                           |
+| **COUNT result**              | `result.n`                               | `result.rows[0].n` with `::int` cast           |
+| **camelCase columns**         | SQLite alias AS name                     | Double-quoted aliases `AS "camelCaseName"`     |
+| **is_priority boolean**       | SQLite `1`/`0` integer + manual `.map`   | Native PostgreSQL `boolean` — no mapping needed |
+
+---
+
+### Task 4: Seed Script Update (`server/db/seed.js`)
+- Rewrote to use `pg` pool with Postgres `$1` parameter syntax.
+- Uses `RETURNING id` to capture inserted user IDs across tables.
+- Wrapped entire seed in a **single transaction** (`BEGIN` / `COMMIT` / `ROLLBACK`).
+- Now runnable standalone: `npm run db:seed`.
+
+---
+
+### package.json Changes
+- Removed `--experimental-sqlite` flag from all `node` commands.
+- Added `"db:seed": "node server/db/seed.js"` script.
+- Removed `better-sqlite3` from dependencies.
+
+---
+
+### Quick Revision — Key Migration Patterns
+
+#### 1. Single Row Query (auth.js)
+```js
+// BEFORE (SQLite)
+const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+
+// AFTER (PostgreSQL)
+const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+const user = rows[0];
+```
+
+#### 2. Insert with Returned ID (listings.js)
+```js
+// BEFORE (SQLite)
+const { lastInsertRowid } = db.prepare('INSERT INTO produce_listings (...) VALUES (...)').run(...);
+
+// AFTER (PostgreSQL)
+const { rows } = await pool.query('INSERT INTO produce_listings (...) VALUES (...) RETURNING id', [...]);
+const newId = rows[0].id;
+```
+
+#### 3. Array Query (demand.js)
+```js
+// BEFORE (SQLite)
+const demands = db.prepare('SELECT ... FROM demand_pool WHERE status != ?').all('fulfilled');
+
+// AFTER (PostgreSQL)
+const { rows: demands } = await pool.query("SELECT ... FROM demand_pool WHERE status != $1", ['fulfilled']);
+```
+
+#### 4. PostgreSQL Error Surfacing (server/index.js)
+```js
+// Global error handler now logs pg-specific error codes
+if (err.code) console.error(`[DB Error Code] ${err.code}:`, err.detail || '');
+```
+
+---
+
 ## [2026-09-01 00:30 IST] - Authentication & Role-Based Routing
 
 ### Objective

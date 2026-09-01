@@ -1,41 +1,50 @@
 /**
- * database.js — SQLite singleton using Node.js 22 built-in node:sqlite
- * Zero external native dependencies.
+ * database.js — PostgreSQL pool via `pg`.
+ * Connects to Supabase (or any Postgres) using the DATABASE_URL env var.
+ * Exposes a singleton pool for use across all route files.
  */
-import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { seedDatabase } from './seed.js';
+import pg from 'pg';
+import 'dotenv/config';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR  = join(__dirname, '../../data');
-const DB_PATH   = join(DATA_DIR, 'harvestlink.db');
-const SCHEMA    = join(__dirname, 'schema.sql');
+const { Pool } = pg;
 
-let _db = null;
+if (!process.env.DATABASE_URL) {
+  throw new Error('[DB] DATABASE_URL is not set. Add it to your .env file.');
+}
 
-export function getDb() {
-  if (_db) return _db;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  // Required for Supabase's TLS setup
+  ssl: { rejectUnauthorized: false },
+  // Connection pool tuning
+  max: 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+});
 
-  // Ensure data directory exists
-  mkdirSync(DATA_DIR, { recursive: true });
+// Log pool errors to avoid unhandled rejections crashing the process
+pool.on('error', (err) => {
+  console.error('[DB] Unexpected pool client error:', err.message);
+});
 
-  _db = new DatabaseSync(DB_PATH);
+/**
+ * getPool() — returns the singleton pg.Pool.
+ * All route files import and call this instead of `getDb()`.
+ */
+export function getPool() {
+  return pool;
+}
 
-  // Enable WAL mode and foreign keys
-  _db.exec('PRAGMA journal_mode = WAL;');
-  _db.exec('PRAGMA foreign_keys = ON;');
-
-  // Run schema migration (idempotent)
-  _db.exec(readFileSync(SCHEMA, 'utf8'));
-
-  // Seed only on empty database
-  const { n } = _db.prepare('SELECT COUNT(*) AS n FROM users').get();
-  if (n === 0) {
-    seedDatabase(_db);
+/**
+ * connectDb() — test the connection on startup and log success.
+ * Call this once in server/index.js at boot.
+ */
+export async function connectDb() {
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query('SELECT NOW() AS now');
+    console.log(`[DB] ✓ Connected to Supabase PostgreSQL — server time: ${rows[0].now}`);
+  } finally {
+    client.release();
   }
-
-  console.log(`[DB] ✓ ${DB_PATH}`);
-  return _db;
 }

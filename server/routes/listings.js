@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb } from '../db/database.js';
+import { getPool } from '../db/database.js';
 
 const router = Router();
 
@@ -16,27 +16,22 @@ function generateFarmCoords(nodeIndex) {
   return { posX, posY, lat, lng };
 }
 
-/**
- * Input sanitization helper
- */
 function sanitizeString(str) {
   if (typeof str !== 'string') return '';
-  return str.trim().replace(/[<>]/g, ''); // strip script tags / angle brackets
+  return str.trim().replace(/[<>]/g, '');
 }
 
 /* ───────────────────────────────────────────────────────────────────────
    POST /api/listings
-   Accepts farmer input, validates/sanitizes payload, inserts into DB.
+   Schema columns: farmer_id, crop, qty, price, status, x, y, lat, lng
 ─────────────────────────────────────────────────────────────────────── */
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
-    const rawCrop       = sanitizeString(req.body.crop);
-    const rawFarmerName = sanitizeString(req.body.farmer_name);
-    const farmerIdNum   = parseInt(req.body.farmer_id, 10) || 1;
-    const qtyNum        = parseFloat(req.body.qty);
-    const priceNum      = parseFloat(req.body.price);
+    const rawCrop     = sanitizeString(req.body.crop);
+    const farmerIdNum = parseInt(req.body.farmer_id, 10) || req.user?.id || 1;
+    const qtyNum      = parseFloat(req.body.qty);
+    const priceNum    = parseFloat(req.body.price);
 
-    // ── Input Validation ──
     if (!rawCrop) {
       return res.status(400).json({ error: 'Validation Error: Crop name is required.' });
     }
@@ -47,66 +42,82 @@ router.post('/', (req, res, next) => {
       return res.status(400).json({ error: 'Validation Error: Price must be a positive finite number.' });
     }
 
-    const db = getDb();
+    const pool = getPool();
 
-    const { n: count } = db.prepare('SELECT COUNT(id) AS n FROM produce_listings').get();
-    const nodeIndex   = count + 1;
-    const farmLetter  = String.fromCharCode(65 + (count % 26));
-    const name        = rawFarmerName || `Farm ${farmLetter}`;
+    // Count existing to generate map coordinates
+    const { rows: countRows } = await pool.query('SELECT COUNT(id)::int AS n FROM produce_listings');
+    const count     = countRows[0].n;
+    const nodeIndex = count + 1;
     const { posX, posY, lat, lng } = generateFarmCoords(nodeIndex);
 
-    // Insert listing with exact column binding
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO produce_listings (farmer_id, farmer_name, crop, qty, price, status, pos_x, pos_y, lat, lng)
-      VALUES (?, ?, ?, ?, ?, 'listed', ?, ?, ?, ?)
-    `).run(farmerIdNum, name, rawCrop, qtyNum, priceNum, posX, posY, lat, lng);
+    // Insert — schema uses x, y (not pos_x, pos_y); no farmer_name column
+    const { rows: insertedRows } = await pool.query(
+      `INSERT INTO produce_listings (farmer_id, crop, qty, price, status, x, y, lat, lng)
+       VALUES ($1, $2, $3, $4, 'listed', $5, $6, $7, $8)
+       RETURNING id`,
+      [farmerIdNum, rawCrop, qtyNum, priceNum, posX, posY, lat, lng]
+    );
+    const newId = insertedRows[0].id;
 
-    // Auto-match demand: select only required columns instead of SELECT *
-    const demand = db.prepare(`
-      SELECT id, requested_qty, matched_qty, status 
-      FROM demand_pool 
-      WHERE LOWER(crop) = LOWER(?) AND status NOT IN ('ready','fulfilled') 
-      LIMIT 1
-    `).get(rawCrop);
+    // Auto-match open demand for the same crop
+    const { rows: demandRows } = await pool.query(
+      `SELECT id, requested_qty, matched_qty, status
+       FROM demand_pool
+       WHERE LOWER(crop) = LOWER($1) AND status NOT IN ('ready','fulfilled')
+       LIMIT 1`,
+      [rawCrop]
+    );
+    const demand = demandRows[0];
 
     if (demand) {
-      const newMatched = Math.min(demand.matched_qty + qtyNum, demand.requested_qty);
-      const newStatus  = newMatched >= demand.requested_qty ? 'ready' : demand.status;
-      db.prepare(`UPDATE demand_pool SET matched_qty = ?, status = ? WHERE id = ?`)
-        .run(newMatched, newStatus, demand.id);
+      const newMatched = Math.min(Number(demand.matched_qty) + qtyNum, Number(demand.requested_qty));
+      const newStatus  = newMatched >= Number(demand.requested_qty) ? 'ready' : demand.status;
+      await pool.query(
+        'UPDATE demand_pool SET matched_qty = $1, status = $2 WHERE id = $3',
+        [newMatched, newStatus, demand.id]
+      );
     }
 
-    // Fetch newly created listing with explicit column selection
-    const listing = db.prepare(`
-      SELECT id, farmer_id, farmer_name AS name, crop, qty, price, status,
-             pos_x AS x, pos_y AS y, lat, lng, created_at AS timestamp
-      FROM produce_listings
-      WHERE id = ?
-    `).get(lastInsertRowid);
+    // Fetch and return the new listing with aliased columns
+    // Schema: x, y (not pos_x, pos_y); no farmer_name
+    const { rows: listingRows } = await pool.query(
+      `SELECT id, farmer_id, crop, qty, price, status,
+              x, y, lat, lng, created_at AS timestamp
+       FROM produce_listings
+       WHERE id = $1`,
+      [newId]
+    );
+    const listing = listingRows[0];
+    // Add a display name derived from the farmer_id for the map
+    listing.name = `Farm ${String.fromCharCode(65 + (count % 26))}`;
 
     return res.status(201).json({ success: true, listing });
   } catch (err) {
-    next(err); // Pass async/sync error to global error handler
+    next(err);
   }
 });
 
 /* ───────────────────────────────────────────────────────────────────────
    GET /api/listings/active
-   Returns all active listings fetching only essential display columns.
 ─────────────────────────────────────────────────────────────────────── */
-router.get('/active', (_req, res, next) => {
+router.get('/active', async (_req, res, next) => {
   try {
-    const db = getDb();
-    const listings = db.prepare(`
-      SELECT
-        id, farmer_id, farmer_name AS name, crop, qty, price, status,
-        pos_x AS x, pos_y AS y, lat, lng, created_at AS timestamp
-      FROM produce_listings
-      WHERE status != 'fulfilled'
-      ORDER BY created_at DESC
-    `).all();
+    const pool = getPool();
+    const { rows: listings } = await pool.query(
+      `SELECT id, farmer_id, crop, qty, price, status,
+              x, y, lat, lng, created_at AS timestamp
+       FROM produce_listings
+       WHERE status != 'fulfilled'
+       ORDER BY created_at DESC`
+    );
 
-    return res.json({ listings });
+    // Generate display names for map nodes
+    const named = listings.map((l, i) => ({
+      ...l,
+      name: `Farm ${String.fromCharCode(65 + (i % 26))}`,
+    }));
+
+    return res.json({ listings: named });
   } catch (err) {
     next(err);
   }

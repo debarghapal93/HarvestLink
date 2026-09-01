@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { getDb } from '../db/database.js';
+import { getPool } from '../db/database.js';
 import { JWT_SECRET, JWT_EXPIRY } from '../middleware/auth.js';
 
 const router = Router();
@@ -13,8 +13,8 @@ function sanitizeString(str) {
 
 /* ───────────────────────────────────────────────────────────────────────
    POST /api/auth/login
-   Body: { email, password }
-   Returns: { token, user: { id, name, role } }
+   Body:    { email, password }
+   Returns: { token, user: { id, name, role, email } }
 ─────────────────────────────────────────────────────────────────────── */
 router.post('/login', async (req, res, next) => {
   try {
@@ -25,16 +25,18 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const db   = getDb();
-    const user = db.prepare(`
-      SELECT id, name, role, email, password_hash
-      FROM users
-      WHERE email = ?
-      LIMIT 1
-    `).get(email);
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT id, name, role, email, password_hash
+       FROM users
+       WHERE email = $1
+       LIMIT 1`,
+      [email]
+    );
+    const user = rows[0];
 
     if (!user) {
-      // Timing-safe: still compare a dummy hash to prevent timing attacks
+      // Timing-safe: still compare a dummy hash to prevent enumeration attacks
       await bcrypt.compare(password, '$2b$10$invalidhashforstringcomparisontiming');
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
@@ -44,7 +46,6 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    // Sign JWT: embed id, name, role in payload
     const payload = { id: user.id, name: user.name, role: user.role };
     const token   = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRY });
 
@@ -60,10 +61,10 @@ router.post('/login', async (req, res, next) => {
 
 /* ───────────────────────────────────────────────────────────────────────
    GET /api/auth/me
-   Returns the currently authenticated user from their JWT.
    Requires: Authorization: Bearer <token>
+   Returns the authenticated user's profile from the DB.
 ─────────────────────────────────────────────────────────────────────── */
-router.get('/me', (req, res, next) => {
+router.get('/me', async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
     const token      = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -73,10 +74,12 @@ router.get('/me', (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const db      = getDb();
-    const user    = db.prepare(`
-      SELECT id, name, role, email, location FROM users WHERE id = ? LIMIT 1
-    `).get(decoded.id);
+    const pool    = getPool();
+    const { rows } = await pool.query(
+      `SELECT id, name, role, email, lat, lng FROM users WHERE id = $1 LIMIT 1`,
+      [decoded.id]
+    );
+    const user = rows[0];
 
     if (!user) return res.status(404).json({ error: 'User not found.' });
     return res.json({ user });

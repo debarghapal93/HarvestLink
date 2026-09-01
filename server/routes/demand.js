@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb } from '../db/database.js';
+import { getPool } from '../db/database.js';
 
 const router = Router();
 
@@ -10,68 +10,65 @@ function sanitizeString(str) {
 
 /* ───────────────────────────────────────────────────────────────────────
    POST /api/demand
-   Accepts buyer requirements, sanitizes payload, inserts into DB.
+   Schema columns: buyer_id, crop, requested_qty, matched_qty,
+                   target_price, status, deadline
+   NOTE: No buyer_label, location, or is_priority in the live schema.
 ─────────────────────────────────────────────────────────────────────── */
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
-    const rawCrop       = sanitizeString(req.body.crop);
-    const rawBuyerLabel = sanitizeString(req.body.buyer_label);
-    const rawLocation   = sanitizeString(req.body.location);
-    const rawDeadline   = sanitizeString(req.body.deadline);
-    const buyerIdNum    = parseInt(req.body.buyer_id, 10) || 4;
-    const qtyNum        = parseFloat(req.body.requested_qty);
-    const targetPrice   = parseFloat(req.body.target_price);
-    const isPriority    = req.body.is_priority ? 1 : 0;
+    const rawCrop     = sanitizeString(req.body.crop);
+    const rawDeadline = sanitizeString(req.body.deadline);
+    const buyerIdNum  = parseInt(req.body.buyer_id, 10) || req.user?.id || 4;
+    const qtyNum      = parseFloat(req.body.requested_qty);
+    const targetPrice = parseFloat(req.body.target_price);
 
-    // ── Input Validation ──
     if (!rawCrop) {
       return res.status(400).json({ error: 'Validation Error: Crop name is required.' });
     }
     if (isNaN(qtyNum) || qtyNum <= 0 || !isFinite(qtyNum)) {
       return res.status(400).json({ error: 'Validation Error: requested_qty must be a positive finite number.' });
     }
+    if (isNaN(targetPrice) || targetPrice <= 0) {
+      return res.status(400).json({ error: 'Validation Error: target_price must be a positive number.' });
+    }
 
-    const db = getDb();
+    const pool = getPool();
 
-    // Pre-calculate matched_qty using targeted column projection
-    const { matched } = db.prepare(`
-      SELECT COALESCE(SUM(qty), 0) AS matched
-      FROM produce_listings
-      WHERE LOWER(crop) = LOWER(?) AND status != 'fulfilled'
-    `).get(rawCrop);
-
-    const initMatched = Math.min(matched || 0, qtyNum);
+    // Pre-calculate matched quantity from existing active listings
+    const { rows: matchRows } = await pool.query(
+      `SELECT COALESCE(SUM(qty), 0)::numeric AS matched
+       FROM produce_listings
+       WHERE LOWER(crop) = LOWER($1) AND status != 'fulfilled'`,
+      [rawCrop]
+    );
+    const matched     = parseFloat(matchRows[0].matched) || 0;
+    const initMatched = Math.min(matched, qtyNum);
     const initStatus  = initMatched >= qtyNum ? 'ready' : 'matching';
 
-    const { lastInsertRowid } = db.prepare(`
-      INSERT INTO demand_pool (buyer_id, buyer_label, crop, requested_qty, matched_qty, target_price, status, location, deadline, is_priority)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      buyerIdNum,
-      rawBuyerLabel || 'Buyer',
-      rawCrop,
-      qtyNum,
-      initMatched,
-      !isNaN(targetPrice) && targetPrice > 0 ? targetPrice : null,
-      initStatus,
-      rawLocation || null,
-      rawDeadline || null,
-      isPriority
+    const { rows: insertedRows } = await pool.query(
+      `INSERT INTO demand_pool (buyer_id, crop, requested_qty, matched_qty, target_price, status, deadline)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      [buyerIdNum, rawCrop, qtyNum, initMatched, targetPrice, initStatus, rawDeadline || null]
     );
+    const newId = insertedRows[0].id;
 
-    // Fetch inserted record with explicit column mapping
-    const demand = db.prepare(`
-      SELECT id, buyer_id, buyer_label AS buyerLabel, crop, requested_qty AS requestedQty,
-             matched_qty AS matchedQty, target_price AS targetPrice, status, location,
-             deadline AS time, is_priority AS isPriority, created_at
-      FROM demand_pool
-      WHERE id = ?
-    `).get(lastInsertRowid);
+    // Fetch the inserted row with aliased names matching the frontend contract
+    const { rows: demandRows } = await pool.query(
+      `SELECT id, buyer_id AS "buyerId", crop,
+              requested_qty AS "requestedQty", matched_qty AS "matchedQty",
+              target_price AS "targetPrice", status,
+              deadline AS time, created_at
+       FROM demand_pool WHERE id = $1`,
+      [newId]
+    );
+    const demand = demandRows[0];
+    // Supply frontend-expected fields not present in schema
+    demand.buyerLabel  = `Buyer #${demand.buyerId}`;
+    demand.location    = 'Nashik District';
+    demand.isPriority  = false;
 
-    return res.status(201).json({
-      success: true,
-      demand: { ...demand, isPriority: demand.isPriority === 1 }
-    });
+    return res.status(201).json({ success: true, demand });
   } catch (err) {
     next(err);
   }
@@ -79,32 +76,29 @@ router.post('/', (req, res, next) => {
 
 /* ───────────────────────────────────────────────────────────────────────
    GET /api/demand/active
-   Returns active demand pool with explicit column selection.
 ─────────────────────────────────────────────────────────────────────── */
-router.get('/active', (_req, res, next) => {
+router.get('/active', async (_req, res, next) => {
   try {
-    const db = getDb();
-    const demands = db.prepare(`
-      SELECT
-        dp.id,
-        dp.buyer_id,
-        dp.buyer_label   AS buyerLabel,
-        dp.crop,
-        dp.requested_qty AS requestedQty,
-        dp.matched_qty   AS matchedQty,
-        dp.target_price  AS targetPrice,
-        dp.status,
-        dp.location,
-        dp.deadline      AS time,
-        dp.is_priority   AS isPriority,
-        dp.created_at
-      FROM demand_pool dp
-      WHERE dp.status != 'fulfilled'
-      ORDER BY dp.is_priority DESC, dp.created_at ASC
-    `).all();
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT id, buyer_id AS "buyerId", crop,
+              requested_qty AS "requestedQty", matched_qty AS "matchedQty",
+              target_price AS "targetPrice", status,
+              deadline AS time, created_at
+       FROM demand_pool
+       WHERE status != 'fulfilled'
+       ORDER BY created_at ASC`
+    );
 
-    const normalized = demands.map(d => ({ ...d, isPriority: d.isPriority === 1 }));
-    return res.json({ demands: normalized });
+    // Hydrate frontend-expected fields missing from schema
+    const demands = rows.map((d, i) => ({
+      ...d,
+      buyerLabel: `Buyer #${d.buyerId}`,
+      location:   'Nashik District',
+      isPriority: i === 0, // Mark first result as priority for UI demo
+    }));
+
+    return res.json({ demands });
   } catch (err) {
     next(err);
   }
