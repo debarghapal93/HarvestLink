@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPool } from '../db/database.js';
+import pool from '../db/database.js';
 
 const router = Router();
 
@@ -42,7 +42,7 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation Error: Price must be a positive finite number.' });
     }
 
-    const pool = getPool();
+
 
     // Count existing to generate map coordinates
     const { rows: countRows } = await pool.query('SELECT COUNT(id)::int AS n FROM produce_listings');
@@ -102,7 +102,7 @@ router.post('/', async (req, res, next) => {
 ─────────────────────────────────────────────────────────────────────── */
 router.get('/active', async (_req, res, next) => {
   try {
-    const pool = getPool();
+
     const { rows: listings } = await pool.query(
       `SELECT id, farmer_id, crop, qty, price, status,
               x, y, lat, lng, created_at AS timestamp

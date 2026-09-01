@@ -11,7 +11,7 @@
  */
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { getPool } from './database.js';
+import pool from './database.js';
 
 const SALT_ROUNDS = 10;
 
@@ -25,7 +25,7 @@ const DEMO_USERS = [
 ];
 
 async function seed() {
-  const pool = getPool();
+
   const client = await pool.connect();
 
   try {

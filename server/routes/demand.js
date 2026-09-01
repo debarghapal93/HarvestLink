@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPool } from '../db/database.js';
+import pool from '../db/database.js';
 
 const router = Router();
 
@@ -32,7 +32,7 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'Validation Error: target_price must be a positive number.' });
     }
 
-    const pool = getPool();
+
 
     // Pre-calculate matched quantity from existing active listings
     const { rows: matchRows } = await pool.query(
@@ -79,7 +79,7 @@ router.post('/', async (req, res, next) => {
 ─────────────────────────────────────────────────────────────────────── */
 router.get('/active', async (_req, res, next) => {
   try {
-    const pool = getPool();
+
     const { rows } = await pool.query(
       `SELECT id, buyer_id AS "buyerId", crop,
               requested_qty AS "requestedQty", matched_qty AS "matchedQty",

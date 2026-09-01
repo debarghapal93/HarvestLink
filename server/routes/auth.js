@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { getPool } from '../db/database.js';
+import pool from '../db/database.js';
 import { JWT_SECRET, JWT_EXPIRY } from '../middleware/auth.js';
 
 const router = Router();
@@ -25,7 +25,7 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
-    const pool = getPool();
+
     const { rows } = await pool.query(
       `SELECT id, name, role, email, password_hash
        FROM users
@@ -74,7 +74,7 @@ router.get('/me', async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const pool    = getPool();
+
     const { rows } = await pool.query(
       `SELECT id, name, role, email, lat, lng FROM users WHERE id = $1 LIMIT 1`,
       [decoded.id]

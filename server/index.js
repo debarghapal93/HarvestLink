@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors    from 'cors';
-import { getPool, connectDb }    from './db/database.js';
+import pool, { testConnection }    from './db/database.js';
 import authRouter                from './routes/auth.js';
 import listingsRouter            from './routes/listings.js';
 import demandRouter              from './routes/demand.js';
@@ -18,9 +18,8 @@ app.use(express.urlencoded({ extended: true }));
 /* ── Health check (public) ────────────────────────────── */
 app.get('/api/health', async (_req, res, next) => {
   try {
-    const pool = getPool();
-    const { rows } = await pool.query('SELECT COUNT(id)::int AS n FROM produce_listings');
-    res.json({ status: 'ok', listings: rows[0].n, timestamp: new Date().toISOString() });
+    await pool.query('SELECT NOW()');
+    res.json({ status: 'ok', db: true });
   } catch (err) {
     next(err);
   }
@@ -57,7 +56,7 @@ app.use((err, req, res, _next) => {
 /* ── Startup ──────────────────────────────────────────── */
 async function start() {
   try {
-    await connectDb();  // Verify Supabase connection before accepting traffic
+    await testConnection();  // Verify Supabase connection before accepting traffic
     app.listen(PORT, () => {
       console.log(`
   ┌─────────────────────────────────────────────┐
@@ -77,10 +76,11 @@ async function start() {
   └─────────────────────────────────────────────┘`);
     });
   } catch (err) {
-    console.error('[Startup] Failed to connect to database:', err.message);
-    process.exit(1);
+
   }
 }
 
-start();
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  start();
+}
 export default app;

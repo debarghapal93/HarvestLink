@@ -2,6 +2,20 @@
 
 ---
 
+## [2026-09-01 14:22 IST] - Serverless Execution & DB Pool Hardening
+
+### Objective
+Fixed a Vercel 500 Serverless Execution Error ("A server error has occurred") by preventing the local `app.listen()` block from running in the Vercel edge environment and documenting lazy DB connection handling.
+
+---
+
+### Task 2: Protect app.listen in server/index.js
+- Updated `server/index.js` to conditionally start the Express HTTP server only if the environment is not `production` and the `VERCEL` flag is not set. 
+- Ensure that the serverless platform natively manages request lifecycles without tying up ports, letting Vercel's Edge effectively route to `/api/index.js`.
+- The Supabase Database connection (via `pg.Pool`) automatically handles connection caching upon receiving its first query (lazy instantiation) rather than proactively connecting via `app.listen`.
+
+---
+
 ## [2026-09-01 14:11 IST] - Vercel Serverless Monorepo Deployment Configuration
 
 ### Objective
