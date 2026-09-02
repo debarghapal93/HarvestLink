@@ -1,43 +1,14 @@
-import { useState } from 'react';
-import { useAppContext } from './context/AppContext';
-import TopNav from './components/TopNav';
-import StatusBar from './components/StatusBar';
-import FarmerPane from './components/FarmerPane';
-import BuyerPane from './components/BuyerPane';
-import LogisticsPane from './components/LogisticsPane';
-import VoiceOverlay from './components/modals/VoiceOverlay';
-import PriceModal from './components/modals/PriceModal';
-import SolverOverlay from './components/modals/SolverOverlay';
-import Toast from './components/Toast';
+import { Navigate, Routes, Route } from 'react-router-dom';
+import { useAuth } from './context/AuthContext';
+import { ROLE_ROUTES } from './components/ProtectedRoute';
+import ProtectedRoute from './components/ProtectedRoute';
+import Login from './components/Login';
+import FarmerDashboard from './pages/FarmerDashboard';
+import BuyerDashboard  from './pages/BuyerDashboard';
+import AdminDashboard  from './pages/AdminDashboard';
 
 export default function App() {
-  const { activeRole, toasts, addToast, aiPrice, setAiPrice } = useAppContext();
-
-  // ── Overlay / modal local state (not shared cross-pane) ──
-  const [isVoiceOpen,     setVoiceOpen]     = useState(false);
-  const [isPriceOpen,     setPriceOpen]     = useState(false);
-  const [isSolverRunning, setSolverRunning] = useState(false);
-  const [loadPct,         setLoadPct]       = useState(72);
-  const [loadKg,          setLoadKg]        = useState('1,450');
-  const [routeBadge,      setRouteBadge]    = useState('idle');
-  // Farmer voice-recognized state to feed into FarmerPane
-  const [voiceCrop, setVoiceCrop] = useState(null);
-  const [voiceQty,  setVoiceQty]  = useState(null);
-
-  const handleSolverComplete = () => {
-    setSolverRunning(false);
-    setLoadPct(78);
-    setLoadKg('1,560');
-    setRouteBadge('optimized');
-    addToast('🚀 VRP Solver complete! Route #4 optimized — saving ₹6.50/kg', 'success');
-  };
-
-  // ── Pane focus: active pane is full-opacity; others are dimmed ──
-  const paneStyle = (role) => ({
-    transition: 'opacity 0.35s ease, transform 0.35s ease',
-    opacity:    activeRole === role ? 1 : 0.55,
-    transform:  activeRole === role ? 'scale(1)' : 'scale(0.995)',
-  });
+  const { isAuthenticated, user } = useAuth();
 
   return (
     <div className="min-h-screen bg-[#F0F4F2] font-sans">
@@ -90,24 +61,62 @@ export default function App() {
           }}
         />
       )}
+    <Routes>
+      {/* ── Public Routes ── */}
+      <Route
+        path="/login"
+        element={
+          isAuthenticated
+            ? <Navigate to={ROLE_ROUTES[user?.role] || '/dashboard/farmer'} replace />
+            : <Login />
+        }
+      />
 
-      {isPriceOpen && (
-        <PriceModal
-          price={aiPrice}
-          onConfirm={(p) => {
-            setAiPrice(p);
-            setPriceOpen(false);
-            addToast(`✅ AI Price updated to ₹${p}/kg`, 'success');
-          }}
-          onClose={() => setPriceOpen(false)}
-        />
-      )}
+      {/* ── Protected Dashboard Routes ── */}
+      <Route
+        path="/dashboard/farmer"
+        element={
+          <ProtectedRoute allowedRoles={['farmer']}>
+            <FarmerDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/dashboard/buyer"
+        element={
+          <ProtectedRoute allowedRoles={['buyer']}>
+            <BuyerDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/dashboard/admin"
+        element={
+          <ProtectedRoute allowedRoles={['logistics']}>
+            <AdminDashboard />
+          </ProtectedRoute>
+        }
+      />
 
-      {isSolverRunning && (
-        <SolverOverlay onComplete={handleSolverComplete} />
-      )}
+      {/* ── Root redirect ── */}
+      <Route
+        path="/"
+        element={
+          isAuthenticated
+            ? <Navigate to={ROLE_ROUTES[user?.role] || '/dashboard/farmer'} replace />
+            : <Navigate to="/login" replace />
+        }
+      />
 
-      <Toast toasts={toasts} />
-    </div>
+      {/* ── 404 → redirect to login or own dashboard ── */}
+      <Route
+        path="*"
+        element={
+          isAuthenticated
+            ? <Navigate to={ROLE_ROUTES[user?.role] || '/dashboard/farmer'} replace />
+            : <Navigate to="/login" replace />
+        }
+      />
+    </Routes>
   );
 }

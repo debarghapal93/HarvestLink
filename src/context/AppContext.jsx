@@ -1,82 +1,162 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 
 /* ═══════════════════════════════════════════════════
-   INITIAL SEED DATA — mock backend state
+   CONSTANTS
 ═══════════════════════════════════════════════════ */
-const INITIAL_LISTINGS = [
-  { id: 1, crop: 'Tomato', qty: 200, price: 25, status: 'assigned', farmerId: 'F001', timestamp: '2026-08-31T08:00:00.000Z' },
-  { id: 2, crop: 'Onion',  qty: 120, price: 18, status: 'pending',  farmerId: 'F001', timestamp: '2026-08-31T09:00:00.000Z' },
-];
-
-const INITIAL_DEMAND = [
-  {
-    id: 1, crop: 'Tomato', buyerLabel: '3 local grocers combined',
-    requestedQty: 450, matchedQty: 260, targetPrice: 28,
-    status: 'matching', location: 'Nashik Hub, 12km away',
-    time: '6:00 PM', isPriority: true,
-  },
-  {
-    id: 2, crop: 'Onion', buyerLabel: 'FPO Batch #12 — Sangamner',
-    requestedQty: 800, matchedQty: 704, targetPrice: 21,
-    status: 'ready', location: 'Sangamner, 28km away',
-    time: 'Tomorrow 9 AM', isPriority: false,
-  },
-  {
-    id: 3, crop: 'Potato', buyerLabel: '2 hotel chains · Pune',
-    requestedQty: 300, matchedQty: 70, targetPrice: 16,
-    status: 'open', location: 'Pune Central Hub, 45km',
-    time: 'Open 48h', isPriority: false,
-  },
-];
+export const HUB_COORDS  = { lat: 20.00, lng: 73.78, x: 185, y: 150, name: 'Nashik Hub' };
+export const DEST_COORDS = { lat: 19.07, lng: 72.87, x: 310, y: 165, name: 'Mumbai' };
 
 /* ═══════════════════════════════════════════════════
-   CONTEXT DEFINITION
+   DYNAMIC PRICING ENGINE
+═══════════════════════════════════════════════════ */
+export const CROP_BASE_PRICES = {
+  tomato: 22, onion: 18, potato: 16,
+  wheat: 24,  chilli: 55, brinjal: 20,
+};
+
+export function calculateRecommendedPrice(cropKey, qty) {
+  const base = CROP_BASE_PRICES[cropKey?.toLowerCase()] ?? 22;
+  const q    = parseFloat(qty) || 0;
+  const mult = q >= 500 ? 1.25 : q >= 200 ? 1.18 : q >= 100 ? 1.12 : q >= 50 ? 1.05 : 1.0;
+  return Number((base * mult + 0.5).toFixed(1));
+}
+
+/* ═══════════════════════════════════════════════════
+   API HELPERS  (token injected from localStorage)
+═══════════════════════════════════════════════════ */
+function getToken() {
+  return localStorage.getItem('hl_token');
+}
+
+function authHeaders() {
+  const token = getToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+const API = {
+  async get(path) {
+    const res = await fetch(path, { headers: authHeaders() });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(error || 'Network error');
+    }
+    return res.json();
+  },
+
+  async post(path, body) {
+    const res = await fetch(path, {
+      method:  'POST',
+      headers: authHeaders(),
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(error || 'Network error');
+    }
+    return res.json();
+  },
+};
+
+/* ═══════════════════════════════════════════════════
+   CONTEXT
 ═══════════════════════════════════════════════════ */
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
-  const [activeRole,      setActiveRole]  = useState('farmer');
-  const [produceListings, setListings]    = useState(INITIAL_LISTINGS);
-  const [buyerDemand,     setBuyerDemand] = useState(INITIAL_DEMAND);
+  // NOTE: activeRole is REMOVED. Role is now from JWT via AuthContext.
+  const [produceListings, setListings]    = useState([]);
+  const [buyerDemand,     setBuyerDemand] = useState([]);
   const [aiPrice,         setAiPrice]     = useState(25);
   const [toasts,          setToasts]      = useState([]);
+  const [routeBadge,      setRouteBadge]  = useState('idle');
+  const [isSolving,       setIsSolving]   = useState(false);
+  const [isLoadingData,   setLoadingData] = useState(true);
 
-  /* ── Toast system ── */
+  const pollRef = useRef(null);
+
+  /* ── Toast System ───────────────────────────────── */
   const addToast = useCallback((msg, type = 'default') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, msg, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4200);
   }, []);
 
-  /* ── Add a produce listing + auto-update demand matches ── */
-  const addListing = useCallback(({ crop, qty, price }) => {
-    // 1. Push new listing
-    const newItem = {
-      id: Date.now(),
-      crop, qty, price,
-      status: 'listed',
-      farmerId: 'F001',
-      timestamp: new Date().toISOString(),
-    };
-    setListings(prev => [newItem, ...prev]);
-
-    // 2. Reactively increment matched qty for the matching demand entry
-    setBuyerDemand(prev => prev.map(demand => {
-      if (demand.crop.toLowerCase() !== crop.toLowerCase()) return demand;
-      const newMatched = Math.min(demand.matchedQty + qty, demand.requestedQty);
-      return {
-        ...demand,
-        matchedQty: newMatched,
-        status: newMatched >= demand.requestedQty ? 'ready' : demand.status,
-      };
-    }));
-
-    // 3. Match notification toast
-    addToast(`${qty}kg ${crop} listed. Matched with local demand pool.`, 'match');
+  /* ── Data Fetching (with Bearer token) ─────────── */
+  const fetchListings = useCallback(async () => {
+    try {
+      const { listings } = await API.get('/api/listings/active');
+      setListings(listings);
+    } catch (err) {
+      console.error('[fetchListings]', err);
+      // Silently fail if not yet authenticated (401 during login transition)
+      if (!err.message.includes('Access denied') && !err.message.includes('No token')) {
+        addToast('⚠️ Failed to load listings from server.', 'error');
+      }
+    }
   }, [addToast]);
 
-  /* ── Join a demand pool (Buyer pane) ── */
-  const joinDemand = useCallback((demandId) => {
+  const fetchDemand = useCallback(async () => {
+    try {
+      const { demands } = await API.get('/api/demand/active');
+      setBuyerDemand(demands);
+    } catch (err) {
+      console.error('[fetchDemand]', err);
+      if (!err.message.includes('Access denied') && !err.message.includes('No token')) {
+        addToast('⚠️ Failed to load demand pool from server.', 'error');
+      }
+    }
+  }, [addToast]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([fetchListings(), fetchDemand()]);
+  }, [fetchListings, fetchDemand]);
+
+  // Initial load + 15s polling (only fires if token exists)
+  useEffect(() => {
+    if (!getToken()) { setLoadingData(false); return; }
+
+    setLoadingData(true);
+    refreshAll().finally(() => setLoadingData(false));
+
+    pollRef.current = setInterval(() => {
+      if (getToken()) refreshAll();
+    }, 15_000);
+    return () => clearInterval(pollRef.current);
+  }, [refreshAll]);
+
+  /* ── Add Produce Listing ────────────────────────── */
+  const addListing = useCallback(async ({ crop, qty, price, farmer_id, farmer_name }) => {
+    const { listing } = await API.post('/api/listings', {
+      farmer_id:   farmer_id  || 1,
+      farmer_name: farmer_name || undefined,
+      crop, qty, price,
+    });
+
+    setListings(prev => [listing, ...prev]);
+    setRouteBadge('idle');
+    await fetchDemand();
+
+    addToast(`${qty}kg ${crop} listed. Matched with local demand pool.`, 'match');
+    return listing;
+  }, [addToast, fetchDemand]);
+
+  /* ── VRP Solver ─────────────────────────────────── */
+  const runSolver = useCallback(() => {
+    setIsSolving(true);
+    setRouteBadge('solving');
+    addToast('🤖 Initializing VRP Solver algorithm…', 'info');
+    setTimeout(() => {
+      setIsSolving(false);
+      setRouteBadge('optimized');
+      addToast('🚀 VRP Route optimization complete! All nodes connected to Hub.', 'success');
+    }, 1500);
+  }, [addToast]);
+
+  /* ── Join Demand Pool ────────────────────────────── */
+  const joinDemand = useCallback(async (demandId) => {
     setBuyerDemand(prev => prev.map(d => {
       if (d.id !== demandId) return d;
       const newMatched = Math.min(d.matchedQty + 50, d.requestedQty);
@@ -87,16 +167,13 @@ export function AppProvider({ children }) {
 
   return (
     <AppContext.Provider value={{
-      // State
-      activeRole, setActiveRole,
-      produceListings,
-      buyerDemand,
+      // activeRole REMOVED — use useAuth().user.role instead
+      produceListings, buyerDemand,
       aiPrice, setAiPrice,
       toasts,
-      // Actions
-      addToast,
-      addListing,
-      joinDemand,
+      routeBadge, isSolving,
+      isLoadingData,
+      addToast, addListing, runSolver, joinDemand, refreshAll,
     }}>
       {children}
     </AppContext.Provider>
